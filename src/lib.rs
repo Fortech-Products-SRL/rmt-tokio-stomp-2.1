@@ -1,6 +1,5 @@
 //! tokio-stomp - A library for asynchronous streaming of STOMP messages
-
-use custom_debug_derive::CustomDebug;
+use custom_debug_derive::Debug as CustomDebug;
 use frame::Frame;
 
 pub mod client;
@@ -126,7 +125,7 @@ pub enum AckMode {
 }
 
 impl Message<ToServer> {
-    fn to_frame(&self) -> Frame {
+    fn to_frame(&self) -> Frame<'_> {
         self.content.to_frame()
     }
     #[allow(dead_code)]

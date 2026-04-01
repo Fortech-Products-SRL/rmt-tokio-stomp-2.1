@@ -1,7 +1,9 @@
 use bytes::{Buf, BytesMut};
 use futures::prelude::*;
 use futures::sink::SinkExt;
+use socket2::{SockRef, TcpKeepalive};
 use std::net::ToSocketAddrs;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
@@ -15,6 +17,25 @@ use crate::frame;
 use crate::{FromServer, Message, Result, ToServer};
 use anyhow::{anyhow, bail};
 
+// Heartbeat: client cannot send (0), wants to receive one every 30 s.
+// This tells the broker to send a bare \n every ~30 s, which keeps NAT
+// sessions alive and lets the broker quickly detect a dead TCP connection.
+const HEARTBEAT_CX: u32 = 0;
+const HEARTBEAT_CY: u32 = 30_000;
+
+/// Configure OS-level TCP keepalive on a connected `TcpStream`.
+///
+/// After 30 s of idle the OS starts sending keepalive probes every 10 s.
+/// This ensures that a half-open (silently dead) socket is detected and
+/// returns an error from `poll_read`, unblocking `conn.next()`.
+fn apply_tcp_keepalive(tcp: &TcpStream) -> Result<()> {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10));
+    SockRef::from(tcp).set_tcp_keepalive(&keepalive)?;
+    Ok(())
+}
+
 /// Connect to a STOMP server via TCP, including the connection handshake.
 /// If successful, returns a tuple of a message stream and a sender,
 /// which may be used to receive and send messages respectively.
@@ -25,6 +46,7 @@ pub async fn connect(
 ) -> Result<ClientTransport> {
     let addr = address.to_socket_addrs().unwrap().next().unwrap();
     let tcp = TcpStream::connect(&addr).await?;
+    apply_tcp_keepalive(&tcp)?;
     let mut transport = ClientCodec.framed(tcp);
     client_handshake(&mut transport, address, login, passcode).await?;
     Ok(transport)
@@ -43,6 +65,8 @@ pub async fn connect_tls(
         .build()?;
     let tls_connector = TlsConnector::from(native_tls_connector);
     let tcp_stream = TcpStream::connect(&addr).await?;
+    // Apply keepalive before the TLS handshake wraps the stream.
+    apply_tcp_keepalive(&tcp_stream)?;
     // Perform the TLS handshake
     let tls_stream: TlsStream<TcpStream> = tls_connector.connect(domain, tcp_stream).await?;
     let mut transport = ClientCodec.framed(tls_stream);
@@ -62,7 +86,10 @@ async fn client_handshake(
             host: address.to_string(),
             login,
             passcode,
-            heartbeat: None,
+            // Negotiate heartbeats: we cannot send (0), we want to receive
+            // one every HEARTBEAT_CY ms.  The broker will send bare \n bytes
+            // at min(broker_cx, HEARTBEAT_CY) ms intervals.
+            heartbeat: Some((HEARTBEAT_CX, HEARTBEAT_CY)),
         },
         extra_headers: vec![],
     };
@@ -89,7 +116,7 @@ async fn client_handshake_tls(
             host: address.to_string(),
             login,
             passcode,
-            heartbeat: None,
+            heartbeat: Some((HEARTBEAT_CX, HEARTBEAT_CY)),
         },
         extra_headers: vec![],
     };
@@ -121,6 +148,22 @@ impl Decoder for ClientCodec {
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
+        // STOMP 1.2 §2.10: the broker sends bare \n (or \r\n) bytes as
+        // heartframes.  Strip them before attempting to parse a full frame so
+        // they do not confuse the nom parser.
+        loop {
+            if src.starts_with(b"\r\n") {
+                src.advance(2);
+            } else if src.starts_with(b"\n") {
+                src.advance(1);
+            } else {
+                break;
+            }
+        }
+        if src.is_empty() {
+            return Ok(None);
+        }
+
         let (item, offset) = match frame::parse_frame(src) {
             Ok((remain, frame)) => (
                 Message::<FromServer>::from_frame(frame),
