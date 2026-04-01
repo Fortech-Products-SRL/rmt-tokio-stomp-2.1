@@ -15,13 +15,13 @@ bytes = "1.1.0"
 custom_debug_derive = "0.6.2"
 anyhow = "1.0"
 futures = "0.3"
-tokio = { version = "1.50.0", features = ["net"] }
+tokio = { version = "1", features = ["net"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 nom = "8.0.0"
 tokio-native-tls = "0.3.1"
 native-tls = "0.2.12"
 dotenvy = "0.15.7"
-socket2 = { version = "0.6.3", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 
 [dev-dependencies]
-tokio = { version = "1.50.0", features = ["time", "macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
