@@ -1,6 +1,4 @@
 //! tokio-stomp - A library for asynchronous streaming of STOMP messages
-
-use custom_debug_derive::CustomDebug;
 use frame::Frame;
 
 pub mod client;
@@ -17,17 +15,9 @@ pub struct Message<T> {
     pub extra_headers: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-fn pretty_bytes(b: &Option<Vec<u8>>, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-    if let Some(v) = b {
-        write!(f, "{}", String::from_utf8_lossy(v))
-    } else {
-        write!(f, "None")
-    }
-}
-
 /// A STOMP message sent from the server
 /// See the [Spec](https://stomp.github.io/stomp-specification-1.2.html) for more information
-#[derive(CustomDebug, Clone)]
+#[derive(Debug, Clone)]
 pub enum FromServer {
     #[doc(hidden)] // The user shouldn't need to know about this one
     Connected {
@@ -42,7 +32,6 @@ pub enum FromServer {
         message_id: String,
         subscription: String,
         headers: Vec<(String, String)>,
-        #[debug(with = "pretty_bytes")]
         body: Option<Vec<u8>>,
     },
     /// Sent from the server to the client once a server has successfully
@@ -51,7 +40,6 @@ pub enum FromServer {
     /// Something went wrong. After sending an Error, the server will close the connection
     Error {
         message: Option<String>,
-        #[debug(with = "pretty_bytes")]
         body: Option<Vec<u8>>,
     },
 }
@@ -126,7 +114,7 @@ pub enum AckMode {
 }
 
 impl Message<ToServer> {
-    fn to_frame(&self) -> Frame {
+    fn to_frame(&self) -> Frame<'_> {
         self.content.to_frame()
     }
     #[allow(dead_code)]

@@ -103,7 +103,7 @@ fn is_empty_slice(s: &[u8]) -> Option<&[u8]> {
     }
 }
 
-pub(crate) fn parse_frame(input: &[u8]) -> IResult<&[u8], Frame> {
+pub(crate) fn parse_frame(input: &[u8]) -> IResult<&[u8], Frame<'_>> {
     // read stream until header end
     many_till(take(1_usize), count(line_ending, 2))(input)?;
 
@@ -132,7 +132,7 @@ pub(crate) fn parse_frame(input: &[u8]) -> IResult<&[u8], Frame> {
     ))
 }
 
-fn parse_header(input: &[u8]) -> IResult<&[u8], Header> {
+fn parse_header(input: &[u8]) -> IResult<&[u8], Header<'_>> {
     complete(separated_pair(
         is_not(":\r\n"),
         tag(":"),
@@ -371,7 +371,7 @@ fn parse_heartbeat(hb: &str) -> Result<(u32, u32)> {
 }
 
 impl ToServer {
-    pub(crate) fn to_frame(&self) -> Frame {
+    pub(crate) fn to_frame(&self) -> Frame<'_> {
         use self::opt_str_to_bytes as sb;
         use Cow::*;
         use ToServer::*;
