@@ -6,7 +6,7 @@ use nom::{
     character::streaming::{alpha1, line_ending, not_line_ending},
     combinator::{complete, opt},
     multi::{count, many0, many_till},
-    sequence::{delimited, separated_pair, terminated, tuple},
+    sequence::{delimited, separated_pair, terminated},
     IResult, Parser,
 };
 
@@ -105,22 +105,23 @@ fn is_empty_slice(s: &[u8]) -> Option<&[u8]> {
 
 pub(crate) fn parse_frame(input: &[u8]) -> IResult<&[u8], Frame<'_>> {
     // read stream until header end
-    many_till(take(1_usize), count(line_ending, 2))(input)?;
+    many_till(take(1_usize), count(line_ending, 2)).parse(input)?;
 
-    let (input, (command, headers)) = tuple((
+    let (input, (command, headers)) = (
         delimited(opt(complete(line_ending)), alpha1, line_ending), // command
         terminated(
             many0(parse_header), // header
             line_ending,
         ),
-    ))(input)?;
+    )
+        .parse(input)?;
 
     let (input, body) = match get_content_length(&headers) {
         None => take_until("\x00").map(is_empty_slice).parse(input)?,
         Some(length) => take(length).map(Some).parse(input)?,
     };
 
-    let (input, _) = tuple((tag("\x00"), opt(complete(line_ending))))(input)?;
+    let (input, _) = (tag("\x00"), opt(complete(line_ending))).parse(input)?;
 
     Ok((
         input,
