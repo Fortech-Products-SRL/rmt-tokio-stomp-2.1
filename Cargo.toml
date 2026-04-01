@@ -20,7 +20,6 @@ tokio-util = { version = "0.7", features = ["codec"] }
 nom = "7.1.3"
 tokio-native-tls = "0.3.1"
 native-tls = "0.2.12"
-log = "0.4.22"
 dotenvy = "0.15.7"
 socket2 = { version = "0.5", features = ["all"] }
 
