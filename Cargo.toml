@@ -23,6 +23,7 @@ tokio-native-tls = "0.3.1"
 native-tls = "0.2.12"
 dotenvy = "0.15.7"
 socket2 = { version = "0.6", features = ["all"] }
+log = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }

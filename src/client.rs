@@ -130,7 +130,17 @@ where
     transport.send(connect).await?;
     // Receive CONNECTED reply
     let msg = transport.next().await.transpose()?;
-    if let Some(FromServer::Connected { .. }) = msg.as_ref().map(|m| &m.content) {
+    if let Some(FromServer::Connected {
+        version, heartbeat, ..
+    }) = msg.as_ref().map(|m| &m.content)
+    {
+        log::info!(
+            "STOMP CONNECTED: version={}, broker heartbeat={:?}, client offered=heart-beat:{},{}",
+            version,
+            heartbeat,
+            HEARTBEAT_CX,
+            HEARTBEAT_CY
+        );
         Ok(())
     } else {
         Err(anyhow!("unexpected reply: {:?}", msg))
