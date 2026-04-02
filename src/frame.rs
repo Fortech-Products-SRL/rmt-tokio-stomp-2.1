@@ -10,18 +10,26 @@ use nom::{
     IResult, Parser,
 };
 
+use smallvec::SmallVec;
 use std::borrow::Cow;
 
 use crate::{AckMode, FromServer, Message, Result, ToServer};
 type HeaderTuple<'a> = (&'a [u8], Option<Cow<'a, [u8]>>);
 type Header<'a> = (&'a [u8], Cow<'a, [u8]>);
 
+/// Maximum number of headers stored inline on the stack.
+/// STOMP frames typically carry 3-8 headers; 16 covers all standard
+/// frames plus a generous margin for custom headers, avoiding heap
+/// allocation in the common case.
+const HEADER_INLINE_CAP: usize = 16;
+type Headers<'a> = SmallVec<[Header<'a>; HEADER_INLINE_CAP]>;
+
 #[derive(Debug)]
 pub(crate) struct Frame<'a> {
     command: &'a [u8],
-    // TODO use ArrayVec to keep headers on the stack
-    // (makes this object zero-allocation)
-    headers: Vec<Header<'a>>,
+    // Headers are stored inline on the stack via SmallVec for the common case
+    // (≤16 headers), falling back to heap allocation for larger frames.
+    headers: Headers<'a>,
     body: Option<&'a [u8]>,
 }
 
@@ -31,7 +39,7 @@ impl<'a> Frame<'a> {
         headers: &[HeaderTuple<'a>],
         body: Option<&'a [u8]>,
     ) -> Frame<'a> {
-        let headers = headers
+        let headers: Headers<'a> = headers
             .iter()
             // filter out headers with None value
             .filter_map(|&(k, ref v)| v.as_ref().map(|i| (k, i.clone())))
@@ -116,6 +124,8 @@ pub(crate) fn parse_frame(input: &[u8]) -> IResult<&[u8], Frame<'_>> {
     )
         .parse(input)?;
 
+    let headers: Headers<'_> = SmallVec::from_vec(headers);
+
     let (input, body) = match get_content_length(&headers) {
         None => take_until("\x00").map(is_empty_slice).parse(input)?,
         Some(length) => take(length).map(Some).parse(input)?,
@@ -191,7 +201,7 @@ fn expect_header<'a>(headers: &'a [(&'a [u8], Cow<'a, [u8]>)], key: &'a str) -> 
 
 impl<'a> Frame<'a> {
     #[allow(dead_code)]
-    pub(crate) fn to_client_msg(&'a self) -> Result<Message<ToServer>> {
+    pub(crate) fn to_client_msg(&self) -> Result<Message<ToServer>> {
         use self::expect_header as eh;
         use self::fetch_header as fh;
         use ToServer::*;
@@ -302,7 +312,7 @@ impl<'a> Frame<'a> {
         })
     }
 
-    pub(crate) fn to_server_msg(&'a self) -> Result<Message<FromServer>> {
+    pub(crate) fn to_server_msg(&self) -> Result<Message<FromServer>> {
         use self::expect_header as eh;
         use self::fetch_header as fh;
         use FromServer::{Connected, Error, Message as Msg, Receipt};

@@ -58,13 +58,7 @@ pub enum FromServer {
     Heartbeat,
 }
 
-// TODO tidy this lot up with traits?
 impl Message<FromServer> {
-    // fn to_frame<'a>(&'a self) -> Frame<'a> {
-    //     unimplemented!()
-    // }
-
-    // TODO make this undead
     fn from_frame(frame: Frame) -> Result<Message<FromServer>> {
         frame.to_server_msg()
     }
@@ -100,7 +94,6 @@ pub enum ToServer {
     /// Acknowledge consumption of a message from a subscription using
     /// 'client' or 'client-individual' acknowledgment.
     Ack {
-        // TODO ack and nack should be automatic?
         id: String,
         transaction: Option<String>,
     },
