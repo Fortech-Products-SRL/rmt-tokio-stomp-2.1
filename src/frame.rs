@@ -156,7 +156,10 @@ fn fetch_header<'a>(headers: &'a [(&'a [u8], Cow<'a, [u8]>)], key: &'a str) -> O
     let kk = key.as_bytes();
     for &(k, ref v) in headers {
         if k == kk {
-            return String::from_utf8(v.to_vec()).ok();
+            // Use lossy conversion: non-UTF-8 bytes become U+FFFD rather than
+            // making the header appear absent (which would produce a misleading
+            // "Expected header '…' missing" error from expect_header).
+            return Some(String::from_utf8_lossy(v).into_owned());
         }
     }
     None
@@ -166,8 +169,8 @@ fn all_headers<'a>(headers: &'a [(&'a [u8], Cow<'a, [u8]>)]) -> Vec<(String, Str
     let mut res = Vec::new();
     for &(k, ref v) in headers {
         let entry = (
-            String::from_utf8(k.to_vec()).unwrap(),
-            String::from_utf8(v.to_vec()).unwrap(),
+            String::from_utf8_lossy(k).into_owned(),
+            String::from_utf8_lossy(v).into_owned(),
         );
         res.push(entry);
     }
@@ -183,8 +186,8 @@ fn optional_headers<'a>(
         .filter(|(k, _)| !expected_keys.contains(k))
         .map(|(k, v)| {
             (
-                String::from_utf8(k.to_vec()).unwrap(),
-                String::from_utf8(v.to_vec()).unwrap(),
+                String::from_utf8_lossy(k).into_owned(),
+                String::from_utf8_lossy(v).into_owned(),
             )
         })
         .collect();
@@ -445,8 +448,8 @@ impl ToServer {
                     (b"destination", Some(Borrowed(destination.as_bytes()))),
                     (b"transaction", sb(transaction)),
                 ];
-                if headers.is_some() {
-                    for (key, val) in headers.as_ref().unwrap() {
+                if let Some(extra) = headers {
+                    for (key, val) in extra {
                         hdr.push((key.as_bytes(), Some(Borrowed(val.as_bytes()))));
                     }
                 }

@@ -4,6 +4,7 @@ use futures::sink::SinkExt;
 use socket2::{SockRef, TcpKeepalive};
 use std::net::ToSocketAddrs;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
@@ -24,6 +25,12 @@ use anyhow::{anyhow, bail};
 const HEARTBEAT_CX: u32 = 10_000;
 const HEARTBEAT_CY: u32 = 30_000;
 
+/// The interval at which this client promises to send STOMP heartbeats.
+///
+/// Pass this (or a fraction of it for extra safety margin) to
+/// [`heartbeat_task`] as the `interval` argument.
+pub const HEARTBEAT_SEND_INTERVAL: Duration = Duration::from_millis(HEARTBEAT_CX as u64);
+
 /// Configure OS-level TCP keepalive on a connected `TcpStream`.
 ///
 /// After 30 s of idle the OS starts sending keepalive probes every 10 s.
@@ -38,8 +45,24 @@ fn apply_tcp_keepalive(tcp: &TcpStream) -> Result<()> {
 }
 
 /// Connect to a STOMP server via TCP, including the connection handshake.
-/// If successful, returns a tuple of a message stream and a sender,
-/// which may be used to receive and send messages respectively.
+/// If successful, returns the framed transport.
+///
+/// # Heartbeats
+/// The STOMP handshake negotiates that the client will send a heartbeat every
+/// [`HEARTBEAT_SEND_INTERVAL`] (10 s). Brokers with an inactivity monitor
+/// (ActiveMQ, RabbitMQ, …) will forcibly close the connection if nothing is
+/// received within that window. Spawn a [`heartbeat_task`] alongside your
+/// receive loop to fulfil this obligation:
+/// ```no_run
+/// # async fn example() -> anyhow::Result<()> {
+/// use futures::prelude::*;
+/// use tokio_stomp_2_1::client;
+/// let conn = client::connect("127.0.0.1:61613", None, None).await?;
+/// let (sink, stream) = conn.split();
+/// tokio::spawn(client::heartbeat_task(sink, client::HEARTBEAT_SEND_INTERVAL));
+/// // drive `stream` on the current task …
+/// # Ok(()) }
+/// ```
 pub async fn connect(
     address: &str,
     login: Option<String>,
@@ -64,7 +87,8 @@ pub async fn connect_tls(
     passcode: Option<String>,
 ) -> Result<ClientTlsTransport> {
     let addr = address
-        .to_socket_addrs()?
+        .to_socket_addrs()
+        .map_err(|e| anyhow!("DNS resolution failed for '{}': {}", address, e))?
         .next()
         .ok_or_else(|| anyhow!("address '{}' resolved to no socket addresses", address))?;
     // Set up the TLS connector
@@ -78,29 +102,33 @@ pub async fn connect_tls(
     // Perform the TLS handshake
     let tls_stream: TlsStream<TcpStream> = tls_connector.connect(domain, tcp_stream).await?;
     let mut transport = ClientCodec.framed(tls_stream);
-    client_handshake_tls(&mut transport, address, login, passcode).await?;
+    client_handshake(&mut transport, address, login, passcode).await?;
     Ok(transport)
 }
 
-async fn client_handshake(
-    transport: &mut ClientTransport,
-    address: &str,
+/// Perform the STOMP CONNECT handshake over any framed transport.
+async fn client_handshake<T>(
+    transport: &mut Framed<T, ClientCodec>,
+    host: &str,
     login: Option<String>,
     passcode: Option<String>,
-) -> Result<()> {
+) -> Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     let connect = Message {
         content: ToServer::Connect {
             accept_version: "1.2".into(),
-            host: address.to_string(),
+            host: host.to_string(),
             login,
             passcode,
             heartbeat: Some((HEARTBEAT_CX, HEARTBEAT_CY)),
         },
         extra_headers: vec![],
     };
-    // Send the message
+    // Send the CONNECT frame
     transport.send(connect).await?;
-    // Receive reply
+    // Receive CONNECTED reply
     let msg = transport.next().await.transpose()?;
     if let Some(FromServer::Connected { .. }) = msg.as_ref().map(|m| &m.content) {
         Ok(())
@@ -109,30 +137,38 @@ async fn client_handshake(
     }
 }
 
-async fn client_handshake_tls(
-    transport: &mut ClientTlsTransport,
-    address: &str,
-    login: Option<String>,
-    passcode: Option<String>,
-) -> Result<()> {
-    let connect = Message {
-        content: ToServer::Connect {
-            accept_version: "1.2".into(),
-            host: address.to_string(),
-            login,
-            passcode,
-            heartbeat: Some((HEARTBEAT_CX, HEARTBEAT_CY)),
-        },
-        extra_headers: vec![],
-    };
-    // Send the message
-    transport.send(connect).await?;
-    // Receive reply
-    let msg = transport.next().await.transpose()?;
-    if let Some(FromServer::Connected { .. }) = msg.as_ref().map(|m| &m.content) {
-        Ok(())
-    } else {
-        Err(anyhow!("unexpected reply: {:?}", msg))
+/// Sends a STOMP heartbeat (bare `\n`) to `sink` at the given `interval`
+/// until the sink errors or is dropped. Exits silently on any send error.
+///
+/// The STOMP handshake negotiates that the client will send a heartbeat every
+/// [`HEARTBEAT_SEND_INTERVAL`] (10 s). Brokers with an inactivity monitor
+/// (ActiveMQ, RabbitMQ, …) will forcibly close the connection if no traffic is
+/// received within that window. Spawn this task alongside your receive loop
+/// to fulfil the obligation:
+///
+/// ```no_run
+/// # async fn example() -> anyhow::Result<()> {
+/// use futures::prelude::*;
+/// use tokio_stomp_2_1::client;
+/// let conn = client::connect("127.0.0.1:61613", None, None).await?;
+/// let (sink, stream) = conn.split();
+/// tokio::spawn(client::heartbeat_task(sink, client::HEARTBEAT_SEND_INTERVAL));
+/// // drive `stream` on the current task …
+/// # Ok(()) }
+/// ```
+pub async fn heartbeat_task<S>(mut sink: S, interval: Duration)
+where
+    S: SinkExt<Message<ToServer>> + Unpin,
+{
+    let mut ticker = tokio::time::interval(interval);
+    // Skip missed ticks: avoid sending a burst of heartbeats after a stall.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        if sink.send(ToServer::Heartbeat.into()).await.is_err() {
+            // Sink closed or underlying connection dropped; exit silently.
+            break;
+        }
     }
 }
 

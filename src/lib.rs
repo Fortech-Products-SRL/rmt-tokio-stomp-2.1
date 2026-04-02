@@ -53,8 +53,17 @@ pub enum FromServer {
         #[debug(with = "pretty_bytes")]
         body: Option<Vec<u8>>,
     },
-    /// Broker heartbeat (bare EOL received).  Surfaced so the application
-    /// layer can track connection liveness and implement receive timeouts.
+    /// A bare heartbeat (`\n` or `\r\n`) received from the broker.
+    ///
+    /// Surfaced so the application layer can reset a liveness timer or
+    /// implement a receive-side timeout.
+    ///
+    /// **Important:** this variant is only returned when heartbeat byte(s)
+    /// arrive and the receive buffer is otherwise empty. If heartbeats and a
+    /// real frame arrive in the same TCP segment the heartbeat bytes are
+    /// consumed silently and only the frame is returned. To reliably detect
+    /// broker liveness, track the arrival of **any** message — not just this
+    /// variant — as a liveness signal.
     Heartbeat,
 }
 
