@@ -433,7 +433,7 @@ impl ToServer {
             } => {
                 let mut hdr: Vec<HeaderTuple> = vec![
                     (b"destination", Some(Borrowed(destination.as_bytes()))),
-                    (b"id", sb(transaction)),
+                    (b"transaction", sb(transaction)),
                 ];
                 if headers.is_some() {
                     for (key, val) in headers.as_ref().unwrap() {
