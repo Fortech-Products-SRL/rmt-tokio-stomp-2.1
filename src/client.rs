@@ -45,7 +45,11 @@ pub async fn connect(
     login: Option<String>,
     passcode: Option<String>,
 ) -> Result<ClientTransport> {
-    let addr = address.to_socket_addrs().unwrap().next().unwrap();
+    let addr = address
+        .to_socket_addrs()
+        .map_err(|e| anyhow!("DNS resolution failed for '{}': {}", address, e))?
+        .next()
+        .ok_or_else(|| anyhow!("address '{}' resolved to no socket addresses", address))?;
     let tcp = TcpStream::connect(&addr).await?;
     apply_tcp_keepalive(&tcp)?;
     let mut transport = ClientCodec.framed(tcp);
@@ -59,7 +63,10 @@ pub async fn connect_tls(
     login: Option<String>,
     passcode: Option<String>,
 ) -> Result<ClientTlsTransport> {
-    let addr = address.to_socket_addrs()?.next().unwrap();
+    let addr = address
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow!("address '{}' resolved to no socket addresses", address))?;
     // Set up the TLS connector
     let native_tls_connector = NativeTlsConnector::builder()
         .danger_accept_invalid_certs(true)
@@ -173,13 +180,32 @@ impl Decoder for ClientCodec {
             return Ok(None);
         }
 
-        let (item, offset) = match frame::parse_frame(src) {
-            Ok((remain, frame)) => (
+        // Parse the frame. The nom error type holds a &[u8] that borrows `src`,
+        // so we convert it to an owned String before touching `src` again.
+        let parse_result = match frame::parse_frame(src) {
+            Ok((remain, frame)) => Ok((
                 Message::<FromServer>::from_frame(frame),
                 remain.as_ptr() as usize - src.as_ptr() as usize,
-            ),
+            )),
             Err(nom::Err::Incomplete(_)) => return Ok(None),
-            Err(e) => bail!("Parse failed: {:?}", e),
+            // Convert error to String to release the immutable borrow on `src`.
+            Err(e) => Err(format!("Parse failed: {:?}", e)),
+        };
+
+        let (item, offset) = match parse_result {
+            Ok(v) => v,
+            Err(msg) => {
+                // Skip past the next frame terminator (\x00) so subsequent
+                // decode calls can attempt to parse the next frame rather than
+                // looping forever on the same malformed bytes.
+                let skip = src
+                    .iter()
+                    .position(|&b| b == b'\x00')
+                    .map(|pos| pos + 1) // consume the \x00 itself
+                    .unwrap_or(src.len()); // no terminator found: drain entire buffer
+                src.advance(skip);
+                bail!("{}", msg);
+            }
         };
         src.advance(offset);
         item.map(Some)
