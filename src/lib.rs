@@ -53,6 +53,9 @@ pub enum FromServer {
         #[debug(with = "pretty_bytes")]
         body: Option<Vec<u8>>,
     },
+    /// Broker heartbeat (bare EOL received).  Surfaced so the application
+    /// layer can track connection liveness and implement receive timeouts.
+    Heartbeat,
 }
 
 // TODO tidy this lot up with traits?
