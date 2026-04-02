@@ -149,16 +149,27 @@ impl Decoder for ClientCodec {
         // STOMP 1.2 §2.10: the broker sends bare \n (or \r\n) bytes as
         // heartframes.  Strip them before attempting to parse a full frame so
         // they do not confuse the nom parser.
+        let mut had_heartbeat = false;
         loop {
             if src.starts_with(b"\r\n") {
                 src.advance(2);
+                had_heartbeat = true;
             } else if src.starts_with(b"\n") {
                 src.advance(1);
+                had_heartbeat = true;
             } else {
                 break;
             }
         }
         if src.is_empty() {
+            if had_heartbeat {
+                // Surface heartbeat arrival so the application layer can
+                // track connection liveness and implement receive timeouts.
+                return Ok(Some(Message {
+                    content: FromServer::Heartbeat,
+                    extra_headers: vec![],
+                }));
+            }
             return Ok(None);
         }
 
