@@ -87,7 +87,7 @@ async fn client_handshake(
             host: address.to_string(),
             login,
             passcode,
-            heartbeat: None,
+            heartbeat: Some((HEARTBEAT_CX, HEARTBEAT_CY)),
         },
         extra_headers: vec![],
     };
