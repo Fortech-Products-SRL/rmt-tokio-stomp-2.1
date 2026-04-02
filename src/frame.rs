@@ -479,6 +479,9 @@ impl ToServer {
                 &[(b"transaction", Some(Borrowed(transaction.as_bytes())))],
                 None,
             ),
+            Heartbeat => {
+                unreachable!("Heartbeat is encoded directly by ClientCodec, not as a frame")
+            }
         }
     }
 }
