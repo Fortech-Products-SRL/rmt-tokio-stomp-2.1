@@ -115,6 +115,9 @@ pub enum ToServer {
     /// Gracefully disconnect from the server
     /// Clients MUST NOT send any more frames after the DISCONNECT frame is sent.
     Disconnect { receipt: Option<String> },
+    /// STOMP heartbeat (bare EOL byte).  Not a real frame — handled
+    /// directly by the encoder so it never goes through `to_frame()`.
+    Heartbeat,
 }
 
 #[derive(Debug, Clone, Copy)]

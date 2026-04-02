@@ -1,4 +1,4 @@
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use futures::prelude::*;
 use futures::sink::SinkExt;
 use socket2::{SockRef, TcpKeepalive};
@@ -17,10 +17,11 @@ use crate::frame;
 use crate::{FromServer, Message, Result, ToServer};
 use anyhow::{anyhow, bail};
 
-// Heartbeat: client cannot send (0), wants to receive one every 30 s.
-// This tells the broker to send a bare \n every ~30 s, which keeps NAT
-// sessions alive and lets the broker quickly detect a dead TCP connection.
-const HEARTBEAT_CX: u32 = 0;
+// Heartbeat: client sends one every 10 s, wants to receive one every 30 s.
+// This tells the broker to send a bare \n every ~30 s, and we promise to
+// send one every ~10 s, which keeps NAT sessions and broker InactivityMonitors
+// satisfied in both directions.
+const HEARTBEAT_CX: u32 = 10_000;
 const HEARTBEAT_CY: u32 = 30_000;
 
 /// Configure OS-level TCP keepalive on a connected `TcpStream`.
@@ -86,10 +87,7 @@ async fn client_handshake(
             host: address.to_string(),
             login,
             passcode,
-            // Negotiate heartbeats: we cannot send (0), we want to receive
-            // one every HEARTBEAT_CY ms.  The broker will send bare \n bytes
-            // at min(broker_cx, HEARTBEAT_CY) ms intervals.
-            heartbeat: Some((HEARTBEAT_CX, HEARTBEAT_CY)),
+            heartbeat: None,
         },
         extra_headers: vec![],
     };
@@ -185,6 +183,11 @@ impl Encoder<Message<ToServer>> for ClientCodec {
         item: Message<ToServer>,
         dst: &mut BytesMut,
     ) -> std::result::Result<(), Self::Error> {
+        // Heartbeat is a bare EOL, not a real STOMP frame.
+        if matches!(&item.content, ToServer::Heartbeat) {
+            dst.put_u8(b'\n');
+            return Ok(());
+        }
         item.to_frame().serialize(dst);
         Ok(())
     }
